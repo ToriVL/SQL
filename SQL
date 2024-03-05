@@ -1,4 +1,4 @@
---Середня зарплата працівників у кожному відділі за кожен рік.
+-- Середня зарплата працівників у кожному відділі за кожен рік.
 
 SELECT EXTRACT(YEAR FROM REPLACE(salaries.to_date, '9999-01-01', CURRENT_DATE()))  AS yeard, dept_no , -- 
 ROUND(AVG(salary), 2) AS average_salary
@@ -21,6 +21,194 @@ SELECT
   round(AVG(s.salary),2) AS overall_average
 FROM salaries s
 JOIN dept_emp d ON d.emp_no = s.emp_no
-WHERE d.dept_no  IN ('d001', 'd002', 'd003', 'd004','d005', 'd006', 'd007', 'd008', 'd009')  --  нужные отделы
+WHERE d.dept_no  IN ('d001', 'd002', 'd003', 'd004','d005', 'd006', 'd007', 'd008', 'd009')  --  необхідні відділи
 GROUP BY yeard WITH rollup
 ORDER BY yeard
+
+
+-- Для кожного року найбільший відділ цього року та його середня зарплата.
+
+-- №1 найшвидший
+WITH sub AS (   
+    SELECT de.dept_no,
+           EXTRACT(YEAR FROM s.to_date) AS report_year,
+           COUNT(de.emp_no) AS empl_count, 
+           ROUND(AVG(s.salary), 2) AS average_salary                     
+    FROM employees.dept_emp AS de   
+    INNER JOIN employees.salaries AS s ON (de.emp_no = s.emp_no)   
+    GROUP BY 1, 2
+), 
+max_count AS (   
+    SELECT report_year, MAX(empl_count) AS max_empl_count   
+    FROM sub   
+    GROUP BY 1
+)
+SELECT sub.dept_no,
+       sub.report_year,
+       sub.average_salary
+FROM sub
+INNER JOIN max_count ON (sub.report_year = max_count.report_year   
+					AND sub.empl_count = max_count.max_empl_count)
+ORDER BY report_year;
+
+-- №2 з використанням віконної фукції
+-- top Цей запит використовує віконну функцію RANK(), щоб присвоїти ранг кожному відділу в кожному році 
+-- залежно від кількості співробітників, а потім вибирає тільки ті рядки, у яких ранг дорівнює 1 (тобто найвищий ранг).
+WITH DeptEmployeeData AS (
+    SELECT distinct COUNT(dept_emp.emp_no) AS employee_count,
+        dept_emp.dept_no, 
+        EXTRACT(YEAR FROM salaries.to_date) AS year,
+        round( AVG(salaries.salary),0) AS AvgSal,
+        RANK() OVER (PARTITION BY EXTRACT(YEAR FROM salaries.to_date) ORDER BY COUNT(dept_emp.emp_no) DESC) AS ranking
+    FROM  dept_emp
+    JOIN salaries ON salaries.emp_no = dept_emp.emp_no
+    GROUP BY dept_emp.dept_no, year
+)
+SELECT dept_no,
+		year,
+		AvgSal AS average_salary
+FROM DeptEmployeeData
+WHERE ranking = 1;
+
+ -- №3 або через створення віртуальної таблиці
+CREATE VIEW _DeptEmployeeData AS
+SELECT
+    dept_emp.dept_no,
+    EXTRACT(YEAR FROM salaries.to_date) AS year,
+    COUNT(dept_emp.emp_no) AS employee_count,
+    ROUND(AVG(salaries.salary), 0) AS AvgSal,
+    RANK() OVER (PARTITION BY EXTRACT(YEAR FROM salaries.to_date) ORDER BY COUNT(dept_emp.emp_no) DESC) AS ranking
+FROM dept_emp
+JOIN salaries ON salaries.emp_no = dept_emp.emp_no
+GROUP BY dept_emp.dept_no, year;
+
+SELECT dept_no,
+       year,
+       AvgSal AS average_salary
+FROM vw_DeptEmployeeData
+WHERE ranking = 1;
+
+
+-- Детальна інформація про поточного менеджера, який найдовше виконує свої обов'язки
+SELECT 
+    employees.*, salaries.salary, 
+    dept_manager.dept_no, departments.dept_name, titles.title,
+    dept_manager.from_date,
+    ROUND((DATEDIFF(NOW(), hire_date) / 365), 0) AS max_years_of_service,
+   REPLACE(dept_manager.to_date, '9999-01-01', CURRENT_DATE()) AS date_
+FROM employees
+JOIN dept_manager ON dept_manager.emp_no = employees.emp_no
+JOIN departments ON dept_manager.dept_no = departments.dept_no
+JOIN titles  ON employees.emp_no = titles.emp_no -- and titles.title = "Manager"
+JOIN salaries ON employees.emp_no = salaries.emp_no AND salaries.to_date >= curdate()
+WHERE dept_manager.to_date >= CURRENT_DATE()
+ORDER BY max_years_of_service DESC
+LIMIT 1 ;
+
+
+-- Для поточної максимальної річної заробітної плати в компанії ПОКАЗАТИ ПІБ
+-- працівника, департамент, поточну посаду, тривалість перебування на поточні посаді та загальний стаж роботи в компанії.
+select 
+	salaries.salary as 'максимальна річна зар. плата', 
+    concat(employees.first_name,' ',employees.last_name) as 'ПІБ',
+	departments.dept_name as 'департамент',
+    titles.title as 'посада',
+    TIMESTAMPDIFF (year,  titles.from_date, curdate()) as 'тривалість перебування на поточній посаді',
+    TIMESTAMPDIFF (year,  employees.hire_date, curdate()) as 'загальний стаж роботи'
+from employees
+join salaries on salaries.emp_no=employees.emp_no 
+join dept_emp on employees.emp_no=dept_emp.emp_no
+join departments on departments.dept_no=dept_emp.dept_no
+join titles on titles.emp_no=employees.emp_no and titles.to_date > curdate()
+where salaries.salary = (select max(salaries.salary) from salaries) ;
+
+
+-- Назви всіх департаментів, назви яких мають букву «а» на будь-якій позиції або «е» на другому місці.
+SELECT dept_name
+FROM departments
+where dept_name like '%a%' or dept_name like '_e%'
+
+
+-- Співробітники, які відповідають наступному опису:
+-- Йому (!) було 45 років, коли його прийняли на роботу, він народився в жовтні і був прийнятий на роботу в неділю.
+SELECT *, TIMESTAMPDIFF (year, birth_date, hire_date) as age , DAYNAME(hire_date) as day
+FROM employees
+WHERE TIMESTAMPDIFF (year, birth_date, hire_date) = 45
+and  extract(month from birth_date) = 10
+and gender = 'm'
+and  DAYNAME(hire_date) = 6   -- and  weekday(hire_date) = 6
+
+
+-- Максимальна річна зарплата в компанії після 01.06.1995.
+SELECT max(salary), extract(year FROM from_date)
+FROM salaries
+where from_date >= '1995-06-01'
+GRoup by extract(year FROM from_date)
+
+
+-- Для кожного працівника повернути їхню поточну зарплату та поточну зарплату поточного керівника
+select employees.emp_no, salaries.salary, empl_manag.emp_no as manager_emp_no, manag_salaries.salary as manager_salary
+from employees
+join salaries on employees.emp_no = salaries.emp_no  and salaries.to_date > curdate()
+join dept_emp on employees.emp_no = dept_emp.emp_no  and dept_emp.to_date > curdate()
+join dept_manager as manager on dept_emp.dept_no = manager.dept_no and manager.to_date > curdate()
+join employees as empl_manag on manager.emp_no = empl_manag.emp_no
+join salaries as manag_salaries on manager.emp_no = manag_salaries.emp_no and manag_salaries.to_date > curdate()
+order by employees.emp_no
+
+
+-- Скільки працівників було найнято у вихідні дні (субота + неділя), розділивши за статтю 
+select count(emp_no), gender
+from employees
+where DAYNAME(hire_date) = 6
+or DAYNAME(hire_date) = 5
+group by gender 
+
+
+-- Згрупувати всіх працівників відповідно до їх віку на 1 січня 1995 року в чотири групи:
+-- 30 або молодше, 31-40, 41-50 і старше. 
+-- Показати середню зарплату для кожної групи та статі.
+SELECT employees.gender,  CASE 
+WHEN TIMESTAMPDIFF (year, birth_date, '1995-01-01') <= 30 THEN '30 та нижче'
+WHEN TIMESTAMPDIFF (year, birth_date, '1995-01-01') between '31' and '40' THEN '31-40'
+WHEN TIMESTAMPDIFF (year, birth_date, '1995-01-01') between '41' and '50' THEN '41-50'
+WHEN TIMESTAMPDIFF (year, birth_date, '1995-01-01') >= '51' THEN '51 і старше'
+END AS category, round(avg(salaries.salary),2) as avg_salary
+FROM employees 
+INNER JOIN salaries on salaries.emp_no=employees.emp_no
+WHERE employees.hire_date > '1995-01-01'
+AND (SELECT MAX(to_date) FROM dept_emp WHERE dept_emp.emp_no = employees.emp_no
+	GROUP BY dept_emp.emp_no) <> '1995-01-01' 
+GROUP BY employees.gender , category 
+order by category desc
+
+
+
+-- Всі співробітники, які зараз заробляють більше, ніж їхні керівники.
+-- для проверки : empl_manag.emp_no as manager_emp_no, manag_salaries.salary as manager_salary
+select employees.emp_no, concat(employees.first_name,' ',employees.last_name) as FIO, salaries.salary 
+from employees
+join salaries on employees.emp_no = salaries.emp_no  and salaries.to_date > curdate()
+join dept_emp on employees.emp_no = dept_emp.emp_no  and dept_emp.to_date > curdate()
+join dept_manager as manager on dept_emp.dept_no = manager.dept_no and manager.to_date > curdate()
+join employees as empl_manag on manager.emp_no = empl_manag.emp_no
+join salaries as manag_salaries on manager.emp_no = manag_salaries.emp_no and manag_salaries.to_date > curdate()
+where salaries.salary > manag_salaries.salary
+order by employees.emp_no
+
+
+-- Номер співробітника та поточна посада 
+-- Проте поточну посаду для Senior співробітників замінити слово Senior на TOP
+select emp_no, title, replace(title, 'Senior' , 'TOP' ) from  titles 
+
+
+-- Покажіть назви відділів для всіх діючих менеджерів, 
+-- проте потрібно щоб в назві між словами замість пробілу був символ нижнього підкреслення.
+select emp_no, dept_name, replace(dept_name, ' ' , '_' )  from dept_manager
+join departments on departments.dept_no=dept_manager.dept_no
+where to_date > CURDATE()
+
+
+-- Для кожного діючого співробітника показати перших 4 символи з яких починається їх посада.
+select emp_no, substring(title, 1, 4) from titles
+where to_date > CURDATE()
